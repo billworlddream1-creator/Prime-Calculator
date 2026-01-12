@@ -52,3 +52,16 @@ export const THEMES: Theme[] = [
     secondary: 'bg-zinc-800/80'
   }
 ];
+
+export const CURRENCIES = {
+  USD: { symbol: '$', name: 'US Dollar', rate: 1.0 },
+  EUR: { symbol: '€', name: 'Euro', rate: 0.92 },
+  GBP: { symbol: '£', name: 'British Pound', rate: 0.79 },
+  JPY: { symbol: '¥', name: 'Japanese Yen', rate: 150.14 },
+  CAD: { symbol: 'C$', name: 'Canadian Dollar', rate: 1.35 },
+  AUD: { symbol: 'A$', name: 'Australian Dollar', rate: 1.52 },
+  CHF: { symbol: 'Fr', name: 'Swiss Franc', rate: 0.88 },
+  CNY: { symbol: '¥', name: 'Chinese Yuan', rate: 7.19 },
+  INR: { symbol: '₹', name: 'Indian Rupee', rate: 82.90 },
+  BTC: { symbol: '₿', name: 'Bitcoin', rate: 0.0000104 }
+};

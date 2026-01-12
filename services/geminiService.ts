@@ -1,8 +1,8 @@
-
 import { GoogleGenAI } from "@google/genai";
 
 export async function getMathInsight(expression: string, result: string) {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  // Always initialize right before use with the correct property name
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',

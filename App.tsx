@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Theme, CalculationEntry } from './types';
-import { THEMES } from './constants';
+import { THEMES, CURRENCIES } from './constants';
 import CalculatorButton from './components/CalculatorButton';
 import { getMathInsight } from './services/geminiService';
 
@@ -25,28 +25,51 @@ const App: React.FC = () => {
   const [insight, setInsight] = useState<string>('Ready for math magic?');
   const [isLoadingInsight, setIsLoadingInsight] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [activeTab, setActiveTab] = useState<'history' | 'calendar' | 'alarm' | 'system'>('history');
+  const [activeTab, setActiveTab] = useState<'history' | 'calendar' | 'alarm' | 'system' | 'currency' | 'graph'>('history');
   
   // New States
   const [userName, setUserName] = useState<string>(localStorage.getItem('prime_user_name') || '');
   const [isShutdown, setIsShutdown] = useState(false);
   const [ramPower, setRamPower] = useState<number>(0);
+  const [cpuLoadHistory, setCpuLoadHistory] = useState<number[]>(new Array(30).fill(50));
   
   // Alarm States
   const [alarms, setAlarms] = useState<Alarm[]>([]);
   const [newAlarmTime, setNewAlarmTime] = useState('08:00');
   const [isRinging, setIsRinging] = useState(false);
 
+  // Currency States
+  const [currFrom, setCurrFrom] = useState<keyof typeof CURRENCIES>('USD');
+  const [currTo, setCurrTo] = useState<keyof typeof CURRENCIES>('EUR');
+  const [currAmount, setCurrAmount] = useState<string>('1');
+  const [conversionResult, setConversionResult] = useState<string>('');
+
+  // Graph States
+  const [graphFunc, setGraphFunc] = useState('sin(x)');
+  const [graphScale, setGraphScale] = useState(20); // Pixels per unit
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
   // Undo/Redo stacks
   const [undoStack, setUndoStack] = useState<CalculatorState[]>([]);
   const [redoStack, setRedoStack] = useState<CalculatorState[]>([]);
 
-  // Simulation: Calculate "RAM Power" based on hardware concurrency and device memory if available
+  // Simulation: Calculate "RAM Power" & CPU Load Tick
   useEffect(() => {
     const corePower = (navigator.hardwareConcurrency || 4) * 250;
     const memPower = ((navigator as any).deviceMemory || 8) * 512;
     const total = corePower + memPower + Math.floor(Math.random() * 100);
     setRamPower(total);
+
+    const loadInterval = setInterval(() => {
+      setCpuLoadHistory(prev => {
+        const nextLoad = Math.max(10, Math.min(95, prev[prev.length - 1] + (Math.random() * 30 - 15)));
+        return [...prev.slice(1), nextLoad];
+      });
+      // Small RAM fluctuation
+      setRamPower(p => p + Math.floor(Math.random() * 20 - 10));
+    }, 500);
+
+    return () => clearInterval(loadInterval);
   }, []);
 
   // Clock & Alarm Monitor
@@ -63,6 +86,115 @@ const App: React.FC = () => {
     }, 1000);
     return () => clearInterval(timer);
   }, [alarms, isRinging]);
+
+  // Currency Logic
+  useEffect(() => {
+    const val = parseFloat(currAmount);
+    if (!isNaN(val)) {
+      const rate = CURRENCIES[currTo].rate / CURRENCIES[currFrom].rate;
+      const result = val * rate;
+      // Handle precision for crypto or small values
+      setConversionResult(result < 0.01 ? result.toFixed(6) : result.toFixed(2));
+    } else {
+      setConversionResult('---');
+    }
+  }, [currAmount, currFrom, currTo]);
+
+  const copyToCalculator = () => {
+    setDisplay(conversionResult);
+    setActiveTab('history'); // Switch back to see result or just generic focus? Let's just update display.
+    // Ideally we might want to stay on the tab, but updating display implies readiness for calc.
+  };
+
+  // Graph Logic
+  const drawGraph = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    // Clear
+    ctx.clearRect(0, 0, width, height);
+
+    // Grid & Axes
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    
+    // Grid lines
+    for (let i = 0; i < width; i += graphScale) { ctx.moveTo(i, 0); ctx.lineTo(i, height); }
+    for (let i = 0; i < height; i += graphScale) { ctx.moveTo(0, i); ctx.lineTo(width, i); }
+    ctx.stroke();
+
+    // Axes
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, height / 2); ctx.lineTo(width, height / 2); // X Axis
+    ctx.moveTo(width / 2, 0); ctx.lineTo(width / 2, height); // Y Axis
+    ctx.stroke();
+
+    if (!graphFunc.trim()) return;
+
+    // Plot Function
+    ctx.strokeStyle = currentTheme.name === 'Cyberpunk Neon' ? '#db2777' : '#10b981';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+
+    const scale = graphScale;
+    let first = true;
+
+    for (let px = 0; px < width; px++) {
+      const x = (px - width / 2) / scale;
+      try {
+        // Sanitize and parse
+        let safeFunc = graphFunc
+          .replace(/sin/g, 'Math.sin')
+          .replace(/cos/g, 'Math.cos')
+          .replace(/tan/g, 'Math.tan')
+          .replace(/log/g, 'Math.log')
+          .replace(/sqrt/g, 'Math.sqrt')
+          .replace(/PI/g, 'Math.PI')
+          .replace(/\^/g, '**');
+
+        // Simple implicit multiplication e.g. 2x -> 2*x
+        safeFunc = safeFunc.replace(/([0-9])x/g, '$1*x');
+
+        const y = new Function('x', `return ${safeFunc}`)(x);
+        const py = height / 2 - (y * scale);
+
+        if (isFinite(py)) {
+          if (first) {
+            ctx.moveTo(px, py);
+            first = false;
+          } else {
+            ctx.lineTo(px, py);
+          }
+        }
+      } catch (e) {
+        // Ignore parsing errors while typing
+      }
+    }
+    ctx.stroke();
+
+  }, [graphFunc, currentTheme, graphScale]);
+
+  useEffect(() => {
+    if (activeTab === 'graph') {
+      // Small delay to ensure canvas is rendered
+      setTimeout(drawGraph, 50);
+    }
+  }, [activeTab, graphFunc, drawGraph, graphScale]);
+
+  const handleZoomIn = () => setGraphScale(prev => Math.min(prev * 1.5, 150));
+  const handleZoomOut = () => setGraphScale(prev => Math.max(prev / 1.5, 5));
+  const handleClearGraph = () => {
+    setGraphFunc('');
+    // Canvas clears via drawGraph effect
+  };
 
   const recordState = useCallback((newDisplay: string, newExpression: string) => {
     if (isShutdown) return;
@@ -288,6 +420,23 @@ const App: React.FC = () => {
 
   const isGrassTheme = currentTheme.name === 'Verdan Meadow';
 
+  // Svg Path Generator for CPU Graph
+  const generateCpuPath = () => {
+    if (cpuLoadHistory.length < 2) return "";
+    const maxVal = 100;
+    const width = 100; // viewbox units
+    const height = 40; // viewbox units
+    const step = width / (cpuLoadHistory.length - 1);
+    
+    let d = `M 0 ${height - (cpuLoadHistory[0] / maxVal) * height}`;
+    for (let i = 1; i < cpuLoadHistory.length; i++) {
+      const x = i * step;
+      const y = height - (cpuLoadHistory[i] / maxVal) * height;
+      d += ` L ${x} ${y}`;
+    }
+    return d;
+  };
+
   if (isShutdown) {
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center text-white font-mono p-4">
@@ -345,7 +494,7 @@ const App: React.FC = () => {
       )}
 
       <header className="mb-6 text-center z-10">
-        <h1 className="text-5xl font-extrabold tracking-tighter drop-shadow-lg text-white">Prime Calculator</h1>
+        <h1 className="text-4xl font-extrabold tracking-tighter drop-shadow-lg text-white">Prime Calculator</h1>
         <p className="text-white/40 text-xs font-black uppercase tracking-[0.4em] mb-4">by Bill World</p>
         <div className="flex items-center justify-center gap-3">
           <p className="text-white/60 text-sm font-medium tracking-wide">In {currentTheme.name}</p>
@@ -452,22 +601,13 @@ const App: React.FC = () => {
           <div className={`${currentTheme.secondary} backdrop-blur-xl border border-white/5 rounded-[2.5rem] p-6 flex-1 shadow-2xl flex flex-col overflow-hidden min-h-[400px]`}>
              {/* Tab Navigation */}
              <nav className="flex items-center gap-1 bg-black/20 p-1 rounded-2xl mb-6 shadow-inner overflow-x-auto no-scrollbar">
-                <button 
-                  onClick={() => setActiveTab('history')}
-                  className={`flex-1 py-2 text-[9px] font-black uppercase tracking-tighter rounded-xl transition-all whitespace-nowrap px-2 ${activeTab === 'history' ? 'bg-white/10 text-white shadow-sm' : 'text-white/30 hover:text-white/60 hover:bg-white/5'}`}
-                >History</button>
-                <button 
-                  onClick={() => setActiveTab('calendar')}
-                  className={`flex-1 py-2 text-[9px] font-black uppercase tracking-tighter rounded-xl transition-all whitespace-nowrap px-2 ${activeTab === 'calendar' ? 'bg-white/10 text-white shadow-sm' : 'text-white/30 hover:text-white/60 hover:bg-white/5'}`}
-                >Calendar</button>
-                <button 
-                  onClick={() => setActiveTab('alarm')}
-                  className={`flex-1 py-2 text-[9px] font-black uppercase tracking-tighter rounded-xl transition-all whitespace-nowrap px-2 ${activeTab === 'alarm' ? 'bg-white/10 text-white shadow-sm' : 'text-white/30 hover:text-white/60 hover:bg-white/5'}`}
-                >Alarm</button>
-                <button 
-                  onClick={() => setActiveTab('system')}
-                  className={`flex-1 py-2 text-[9px] font-black uppercase tracking-tighter rounded-xl transition-all whitespace-nowrap px-2 ${activeTab === 'system' ? 'bg-white/10 text-white shadow-sm' : 'text-white/30 hover:text-white/60 hover:bg-white/5'}`}
-                >System</button>
+                {(['history', 'calendar', 'currency', 'graph', 'alarm', 'system'] as const).map(tab => (
+                  <button 
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    className={`flex-1 py-2 text-[9px] font-black uppercase tracking-tighter rounded-xl transition-all whitespace-nowrap px-2 ${activeTab === tab ? 'bg-white/10 text-white shadow-sm' : 'text-white/30 hover:text-white/60 hover:bg-white/5'}`}
+                  >{tab}</button>
+                ))}
              </nav>
 
              <div className="flex-1 overflow-y-auto custom-scrollbar">
@@ -495,6 +635,105 @@ const App: React.FC = () => {
                          </button>
                        ))
                      )}
+                   </div>
+                 </div>
+               )}
+
+               {activeTab === 'currency' && (
+                 <div className="animate-fade-in flex flex-col h-full">
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30 mb-4">Real-Time Exchange</p>
+                    <div className="space-y-4 flex-1">
+                      <div className="bg-black/20 p-4 rounded-2xl border border-white/5">
+                        <label className="text-[10px] text-white/40 font-bold uppercase block mb-2">Amount</label>
+                        <input 
+                          type="number" 
+                          value={currAmount} 
+                          onChange={(e) => setCurrAmount(e.target.value)} 
+                          className="w-full bg-transparent text-2xl font-bold text-white outline-none border-b border-white/10 focus:border-white/40 transition-colors pb-2"
+                        />
+                      </div>
+                      
+                      <div className="flex gap-2">
+                         <div className="flex-1">
+                            <label className="text-[10px] text-white/40 font-bold uppercase block mb-2">From</label>
+                            <select 
+                              value={currFrom}
+                              onChange={(e) => setCurrFrom(e.target.value as keyof typeof CURRENCIES)}
+                              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-3 text-sm font-bold text-white outline-none focus:bg-white/10"
+                            >
+                              {Object.keys(CURRENCIES).map(c => (
+                                <option key={c} value={c} className="bg-gray-900">{c} - {CURRENCIES[c as keyof typeof CURRENCIES].name}</option>
+                              ))}
+                            </select>
+                         </div>
+                         <div className="flex items-end pb-3 text-white/30">
+                           <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
+                         </div>
+                         <div className="flex-1">
+                            <label className="text-[10px] text-white/40 font-bold uppercase block mb-2">To</label>
+                            <select 
+                              value={currTo}
+                              onChange={(e) => setCurrTo(e.target.value as keyof typeof CURRENCIES)}
+                              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-3 text-sm font-bold text-white outline-none focus:bg-white/10"
+                            >
+                              {Object.keys(CURRENCIES).map(c => (
+                                <option key={c} value={c} className="bg-gray-900">{c} - {CURRENCIES[c as keyof typeof CURRENCIES].name}</option>
+                              ))}
+                            </select>
+                         </div>
+                      </div>
+
+                      <div className="bg-white/5 rounded-2xl p-6 text-center border border-white/10 mt-auto">
+                        <div className="text-[10px] text-white/40 font-bold uppercase tracking-widest mb-1">Estimated Value</div>
+                        <div className="text-4xl font-bold text-white mb-2">{CURRENCIES[currTo].symbol}{conversionResult}</div>
+                        <div className="text-[9px] text-white/20 font-mono">
+                           1 {currFrom} = {(CURRENCIES[currTo].rate / CURRENCIES[currFrom].rate).toFixed(6)} {currTo}
+                        </div>
+                      </div>
+
+                      <button onClick={copyToCalculator} className="w-full py-3 bg-white/10 hover:bg-white/20 text-white font-bold text-xs uppercase tracking-widest rounded-xl transition-all border border-white/5">
+                        Copy to Calculator
+                      </button>
+                    </div>
+                 </div>
+               )}
+
+               {activeTab === 'graph' && (
+                 <div className="animate-fade-in h-full flex flex-col">
+                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30 mb-4">Function Plotter</p>
+                   
+                   <div className="flex gap-2 mb-2 items-center">
+                      <div className="relative flex-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40 font-mono text-sm">f(x)=</span>
+                        <input 
+                          type="text" 
+                          value={graphFunc} 
+                          onChange={(e) => setGraphFunc(e.target.value)} 
+                          className="w-full bg-white/5 border border-white/10 rounded-xl pl-12 pr-4 py-2 text-white font-mono text-sm outline-none focus:border-white/30"
+                        />
+                      </div>
+                      <button onClick={drawGraph} className={`${currentTheme.accent} text-white px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-wider`}>Plot</button>
+                   </div>
+
+                   <div className="bg-black/40 rounded-2xl overflow-hidden border border-white/10 mb-4 aspect-[4/3] relative group">
+                     <canvas ref={canvasRef} width={320} height={240} className="w-full h-full object-contain"></canvas>
+                     <div className="absolute top-2 right-2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={handleZoomIn} className="w-8 h-8 bg-white/10 hover:bg-white/20 rounded-full text-white flex items-center justify-center font-bold" title="Zoom In">+</button>
+                        <button onClick={handleZoomOut} className="w-8 h-8 bg-white/10 hover:bg-white/20 rounded-full text-white flex items-center justify-center font-bold" title="Zoom Out">-</button>
+                     </div>
+                   </div>
+
+                   <div className="flex justify-between items-center mb-2">
+                      <div className="grid grid-cols-4 gap-2 flex-1 mr-2">
+                        {['sin(x)', 'cos(x)', 'x^2', 'log(x)'].map(f => (
+                          <button key={f} onClick={() => setGraphFunc(f)} className="bg-white/5 hover:bg-white/10 text-white/60 hover:text-white text-[10px] py-1 rounded-lg border border-white/5 font-mono transition-colors">
+                            {f}
+                          </button>
+                        ))}
+                      </div>
+                      <button onClick={handleClearGraph} className="bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[10px] py-1 px-3 rounded-lg border border-red-500/10 font-bold uppercase tracking-wide">
+                        Clear
+                      </button>
                    </div>
                  </div>
                )}
@@ -562,11 +801,27 @@ const App: React.FC = () => {
                       <div className="space-y-4">
                         <div>
                           <div className="flex justify-between text-[10px] mb-1">
-                            <span className="text-white/60">RAM PROCESSING POWER</span>
-                            <span className="text-blue-400">{ramPower} PPS</span>
+                            <span className="text-white/60">CPU LIVE LOAD</span>
+                            <span className="text-emerald-400 animate-pulse">{ramPower} PPS</span>
                           </div>
-                          <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                            <div className="h-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]" style={{ width: `${Math.min(100, (ramPower / 5000) * 100)}%` }}></div>
+                          {/* Live CPU Graph */}
+                          <div className="h-16 w-full bg-black/50 rounded-lg overflow-hidden border border-white/5 relative">
+                             <svg viewBox="0 0 100 40" preserveAspectRatio="none" className="w-full h-full">
+                                <path 
+                                  d={generateCpuPath()} 
+                                  fill="none" 
+                                  stroke={currentTheme.name === 'Cyberpunk Neon' ? '#ec4899' : '#10b981'} 
+                                  strokeWidth="1"
+                                  vectorEffect="non-scaling-stroke"
+                                />
+                                <path 
+                                  d={`${generateCpuPath()} V 40 H 0 Z`} 
+                                  fill={currentTheme.name === 'Cyberpunk Neon' ? 'rgba(236, 72, 153, 0.2)' : 'rgba(16, 185, 129, 0.2)'} 
+                                  stroke="none"
+                                />
+                             </svg>
+                             {/* Scan line effect */}
+                             <div className="absolute inset-0 bg-gradient-to-b from-transparent via-white/5 to-transparent animate-[scan_2s_linear_infinite] pointer-events-none"></div>
                           </div>
                         </div>
 
@@ -611,6 +866,12 @@ const App: React.FC = () => {
       <footer className="mt-8 text-white/30 text-[10px] uppercase tracking-[0.3em] font-black z-10 text-center animate-pulse-soft">
         &copy; {new Date().getFullYear()} Prime Calculator &bull; Bill World Signature Series
       </footer>
+      <style>{`
+        @keyframes scan {
+          0% { transform: translateY(-100%); }
+          100% { transform: translateY(100%); }
+        }
+      `}</style>
     </div>
   );
 };
