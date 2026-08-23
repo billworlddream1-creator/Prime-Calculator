@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Prime Calculator</string>
+    <string name="title_activity_main">Prime Calculator</string>
+    <string name="package_name">com.primecalculator.app</string>
+    <string name="custom_url_scheme">com.primecalculator.app</string>
+</resources>
