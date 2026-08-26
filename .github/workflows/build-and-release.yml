@@ -1,0 +1,149 @@
+name: Build, Artifacts & Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Multi-Platform Artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Java JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set Release Version Environment Variable
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="v1.0.1-${GITHUB_SHA:0:7}"
+          fi
+          echo "RELEASE_VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Sync Capacitor Native Projects
+        run: npx cap sync
+
+      - name: Build Android Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Prepare Platform Bundles
+        run: |
+          mkdir -p release-artifacts
+
+          # Copy Android APK
+          cp android/app/build/outputs/apk/debug/app-debug.apk "release-artifacts/prime-calculator-${RELEASE_VERSION}.apk"
+
+          # Package Web static dist
+          zip -r "release-artifacts/prime-calculator-web-${RELEASE_VERSION}.zip" dist/
+
+          # Package Windows Web Bundle
+          zip -r "release-artifacts/prime-calculator-windows-web-${RELEASE_VERSION}.zip" dist/
+
+          # Package macOS Web Bundle
+          zip -r "release-artifacts/prime-calculator-macos-web-${RELEASE_VERSION}.zip" dist/
+
+          # Package iOS Capacitor Project Bundle
+          zip -r "release-artifacts/prime-calculator-ios-project-${RELEASE_VERSION}.zip" ios/
+
+      - name: Calculate & Output File Sizes
+        run: |
+          echo "### 📦 Build Artifact File Sizes (${RELEASE_VERSION})" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | File Name | Size (Bytes) | Human Readable |" >> $GITHUB_STEP_SUMMARY
+          echo "| --- | --- | --- | --- |" >> $GITHUB_STEP_SUMMARY
+          for file in release-artifacts/*; do
+            filename=$(basename "$file")
+            size_bytes=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file")
+            size_human=$(ls -lh "$file" | awk '{print $5}')
+            echo "| ${filename} | \`${filename}\` | ${size_bytes} | ${size_human} |" >> $GITHUB_STEP_SUMMARY
+          done
+
+      - name: Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-${{ env.RELEASE_VERSION }}
+          path: release-artifacts/prime-calculator-*.apk
+          retention-days: 90
+
+      - name: Upload Web Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build-${{ env.RELEASE_VERSION }}
+          path: release-artifacts/prime-calculator-web-*.zip
+          retention-days: 90
+
+      - name: Upload Windows Web App Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-app-${{ env.RELEASE_VERSION }}
+          path: release-artifacts/prime-calculator-windows-web-*.zip
+          retention-days: 90
+
+      - name: Upload macOS Web App Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app-${{ env.RELEASE_VERSION }}
+          path: release-artifacts/prime-calculator-macos-web-*.zip
+          retention-days: 90
+
+      - name: Upload iOS Project Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-project-${{ env.RELEASE_VERSION }}
+          path: release-artifacts/prime-calculator-ios-project-*.zip
+          retention-days: 90
+
+      - name: Create GitHub Release on Tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ env.RELEASE_VERSION }}
+          body: |
+            ## Prime Calculator Cross-Platform Release (${{ env.RELEASE_VERSION }})
+
+            Full binary packages and platform distribution bundles for release `${{ env.RELEASE_VERSION }}`.
+
+            ### Assets & Packages
+            - `prime-calculator-${{ env.RELEASE_VERSION }}.apk` - Android Debug APK Package
+            - `prime-calculator-windows-web-${{ env.RELEASE_VERSION }}.zip` - Windows Desktop Web Asset Bundle
+            - `prime-calculator-macos-web-${{ env.RELEASE_VERSION }}.zip` - macOS Desktop Web Asset Bundle
+            - `prime-calculator-ios-project-${{ env.RELEASE_VERSION }}.zip` - iOS Capacitor Xcode Project
+            - `prime-calculator-web-${{ env.RELEASE_VERSION }}.zip` - Universal Static Web Bundle
+          files: |
+            release-artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
